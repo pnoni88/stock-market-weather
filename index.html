@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>시장 날씨 — 오늘의 주식 시장 분위기</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --card-bg: rgba(255, 255, 255, 0.10);
+    --card-border: rgba(255, 255, 255, 0.22);
+    --text: #ffffff;
+    --text-dim: rgba(255, 255, 255, 0.72);
+  }
+
+  html, body { height: 100%; }
+
+  body {
+    font-family: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+    color: var(--text);
+    overflow-x: hidden;
+    min-height: 100vh;
+    transition: background 1.2s ease;
+    background: linear-gradient(180deg, #2f80ed 0%, #56ccf2 100%);
+  }
+
+  /* ── 날씨별 하늘 배경 ─────────────────────────── */
+  body.w-sunny    { background: linear-gradient(180deg, #1e90ff 0%, #6ec6ff 55%, #ffe9a8 100%); }
+  body.w-partly   { background: linear-gradient(180deg, #3f7fbf 0%, #7fb2d9 60%, #cfe3ee 100%); }
+  body.w-cloudy   { background: linear-gradient(180deg, #57606f 0%, #808e9b 60%, #a4b0be 100%); }
+  body.w-rain     { background: linear-gradient(180deg, #33404f 0%, #4b5d70 60%, #62788e 100%); }
+  body.w-storm    { background: linear-gradient(180deg, #191f2b 0%, #273246 60%, #354258 100%); }
+  body.w-fear     { background: linear-gradient(180deg, #0d0a14 0%, #241a33 55%, #3a2440 100%); }
+
+  /* ── 하늘 장식 레이어 ────────────────────────── */
+  #sky {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 0;
+  }
+
+  .sun {
+    position: absolute; top: 7%; right: 10%;
+    width: 120px; height: 120px; border-radius: 50%;
+    background: radial-gradient(circle, #fff7cf 20%, #ffd93b 55%, rgba(255, 217, 59, 0) 72%);
+    box-shadow: 0 0 90px 40px rgba(255, 220, 90, 0.55);
+    animation: sunPulse 4s ease-in-out infinite;
+  }
+  @keyframes sunPulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.08); }
+  }
+
+  .cloud {
+    position: absolute;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 999px;
+    filter: blur(2px);
+    animation: drift linear infinite;
+  }
+  .cloud::before, .cloud::after {
+    content: ""; position: absolute; background: inherit; border-radius: 50%;
+  }
+  .cloud::before { width: 55%; height: 160%; left: 12%; top: -70%; }
+  .cloud::after  { width: 45%; height: 130%; right: 12%; top: -50%; }
+  .cloud.dark { background: rgba(70, 80, 95, 0.9); }
+  .cloud.grim { background: rgba(38, 44, 58, 0.95); }
+  @keyframes drift {
+    from { transform: translateX(-30vw); }
+    to   { transform: translateX(130vw); }
+  }
+
+  .drop {
+    position: absolute; top: -30px;
+    width: 2px; height: 18px;
+    background: linear-gradient(180deg, rgba(180, 210, 255, 0), rgba(180, 210, 255, 0.85));
+    animation: fall linear infinite;
+  }
+  @keyframes fall {
+    to { transform: translateY(110vh); }
+  }
+
+  .flash {
+    position: fixed; inset: 0;
+    background: rgba(255, 255, 240, 0);
+    pointer-events: none;
+    z-index: 1;
+  }
+  body.w-storm .flash, body.w-fear .flash { animation: lightning 6s infinite; }
+  @keyframes lightning {
+    0%, 91%, 95%, 100% { background: rgba(255, 255, 240, 0); }
+    92%, 94% { background: rgba(255, 255, 240, 0.25); }
+    93%      { background: rgba(255, 255, 240, 0.07); }
+  }
+
+  .debris {
+    position: absolute;
+    font-size: 20px;
+    opacity: 0.8;
+    animation: swirl 3.2s ease-in-out infinite;
+  }
+  @keyframes swirl {
+    0%   { transform: translate(0, 0) rotate(0deg); }
+    25%  { transform: translate(60px, -70px) rotate(180deg); }
+    50%  { transform: translate(-40px, -140px) rotate(360deg); }
+    75%  { transform: translate(50px, -210px) rotate(540deg); }
+    100% { transform: translate(0, -280px) rotate(720deg); opacity: 0; }
+  }
+
+  /* ── 본문 ────────────────────────────────────── */
+  main {
+    position: relative; z-index: 2;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 40px 20px 60px;
+    display: flex; flex-direction: column; gap: 22px;
+  }
+
+  header { text-align: center; }
+  header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+  header p  { margin-top: 6px; color: var(--text-dim); font-size: 0.9rem; }
+
+  .status {
+    margin-top: 10px;
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.22);
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+  .status .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #9aa4b2;
+  }
+  .status.live .dot { background: #4ade80; animation: blink 1.6s ease-in-out infinite; }
+  .status.err  .dot { background: #f87171; }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+
+  .hero {
+    text-align: center;
+    padding: 34px 20px 28px;
+    border-radius: 24px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  }
+  .hero .emoji {
+    font-size: 6rem;
+    line-height: 1.1;
+    display: inline-block;
+    filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.25));
+    transition: transform 0.5s ease;
+  }
+  .hero.changed .emoji { animation: pop 0.55s ease; }
+  @keyframes pop {
+    0% { transform: scale(0.6); }
+    60% { transform: scale(1.15); }
+    100% { transform: scale(1); }
+  }
+  .hero h2 { font-size: 2.1rem; margin-top: 10px; letter-spacing: -0.02em; }
+  .hero .desc { margin-top: 8px; font-size: 1.02rem; color: var(--text-dim); }
+
+  .index-line {
+    margin-top: 18px;
+    display: flex; justify-content: center; align-items: baseline; gap: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .index-line .name  { font-size: 0.92rem; color: var(--text-dim); }
+  .index-line .value { font-size: 1.7rem; font-weight: 700; }
+  .index-line .chg   { font-size: 1.05rem; font-weight: 600; }
+  .chg.up   { color: #ffb3b3; }
+  .chg.down { color: #a8c8ff; }
+  .chg.flat { color: var(--text-dim); }
+
+  /* 상승/보합/하락 비율 바 */
+  .breadth {
+    padding: 20px 22px;
+    border-radius: 20px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  .breadth .labels {
+    display: flex; justify-content: space-between;
+    font-size: 0.9rem; margin-bottom: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .breadth .labels b { font-size: 1.05rem; }
+  .lb-up   { color: #ffc2c2; }
+  .lb-flat { color: var(--text-dim); }
+  .lb-down { color: #b5d0ff; }
+
+  .bar {
+    display: flex; height: 16px; border-radius: 999px; overflow: hidden;
+    background: rgba(0, 0, 0, 0.25);
+  }
+  .bar > div { transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1); }
+  .bar .seg-up   { background: linear-gradient(90deg, #ff7b7b, #ff5b5b); }
+  .bar .seg-flat { background: #8b95a5; }
+  .bar .seg-down { background: linear-gradient(90deg, #4d8dff, #7bb0ff); }
+
+  /* 종목 그리드 */
+  .stocks {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+  }
+  .stock {
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    font-variant-numeric: tabular-nums;
+  }
+  .stock .nm { font-size: 0.85rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stock .pc { font-size: 1.05rem; font-weight: 700; margin-top: 3px; }
+  .stock .ch { font-size: 0.85rem; font-weight: 600; margin-top: 1px; }
+  .stock .ch.up   { color: #ffb3b3; }
+  .stock .ch.down { color: #a8c8ff; }
+  .stock .ch.flat { color: var(--text-dim); }
+
+  /* 모드 버튼 */
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+  }
+  .controls button {
+    padding: 9px 16px;
+    border-radius: 999px;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: inherit;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transition: background 0.2s ease, transform 0.1s ease;
+  }
+  .controls button:hover  { background: rgba(255, 255, 255, 0.22); }
+  .controls button:active { transform: scale(0.96); }
+  .controls button.active {
+    background: rgba(255, 255, 255, 0.9);
+    color: #22304a;
+    font-weight: 700;
+  }
+
+  footer {
+    text-align: center;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  @media (max-width: 520px) {
+    .hero .emoji { font-size: 4.4rem; }
+    .hero h2 { font-size: 1.6rem; }
+  }
+</style>
+</head>
+<body>
+  <div id="sky"></div>
+  <div class="flash"></div>
+
+  <main>
+    <header>
+      <h1>📈 시장 날씨</h1>
+      <p>오늘의 주식 시장 분위기를 날씨로 알려드립니다</p>
+      <span class="status" id="status"><span class="dot"></span><span id="statusText">연결 중…</span></span>
+    </header>
+
+    <section class="hero" id="hero">
+      <span class="emoji" id="wEmoji">⛅</span>
+      <h2 id="wName">불러오는 중</h2>
+      <p class="desc" id="wDesc">시장 데이터를 가져오고 있어요…</p>
+      <div class="index-line">
+        <span class="name" id="idxName">코스피</span>
+        <span class="value" id="idxValue">—</span>
+        <span class="chg flat" id="idxChg">—</span>
+      </div>
+    </section>
+
+    <section class="breadth">
+      <div class="labels">
+        <span class="lb-up">▲ 상승 <b id="upPct">0%</b> (<span id="upCnt">0</span>)</span>
+        <span class="lb-flat">— 보합 <b id="flatPct">0%</b> (<span id="flatCnt">0</span>)</span>
+        <span class="lb-down">▼ 하락 <b id="downPct">0%</b> (<span id="downCnt">0</span>)</span>
+      </div>
+      <div class="bar">
+        <div class="seg-up" id="segUp"></div>
+        <div class="seg-flat" id="segFlat"></div>
+        <div class="seg-down" id="segDown"></div>
+      </div>
+    </section>
+
+    <section class="stocks" id="stockGrid"></section>
+
+    <section class="controls" id="controls">
+      <button data-mode="live" class="active">📡 실시간 KOSPI</button>
+      <button data-mode="auto">🔄 시뮬레이션</button>
+      <button data-mode="sunny">☀️ 맑음</button>
+      <button data-mode="cloudy">⛅ 흐림</button>
+      <button data-mode="storm">🌧 폭우</button>
+      <button data-mode="fear">🌪 공포</button>
+    </section>
+
+    <footer>
+      실시간 모드: 네이버 증권 시세 기반 (코스피 시가총액 상위 30개 종목 · 지연/종가 시세일 수 있음)<br>
+      시뮬레이션 모드는 가상 데이터입니다. 투자 판단의 근거로 사용하지 마세요.
+    </footer>
+  </main>
+
+<script>
+(() => {
+  "use strict";
+
+  /* ── 날씨 정의 ─────────────────────────────── */
+  const WEATHER = {
+    sunny:  { cls: "w-sunny",  emoji: "☀️", name: "맑음",
+              desc: "시장 전반이 뜨겁게 상승 중입니다" },
+    partly: { cls: "w-partly", emoji: "🌤", name: "구름 조금",
+              desc: "상승 우위, 분위기가 밝은 편이에요" },
+    cloudy: { cls: "w-cloudy", emoji: "⛅", name: "흐림",
+              desc: "보합권, 시장이 방향을 정하지 못하고 있어요" },
+    rain:   { cls: "w-rain",   emoji: "🌧", name: "비",
+              desc: "하락 우위, 우산을 챙기세요" },
+    storm:  { cls: "w-storm",  emoji: "⛈", name: "폭우",
+              desc: "대부분의 종목이 하락 중입니다" },
+    fear:   { cls: "w-fear",   emoji: "🌪", name: "공포",
+              desc: "급락장! 시장에 공포가 번지고 있습니다" },
+  };
+
+  /* 상승 비율(advance %)과 지수 등락률로 날씨 판정 */
+  function classify(upRatio, idxChangePct) {
+    if (idxChangePct <= -3)  return "fear";
+    if (upRatio <= 0.12)     return "storm";
+    if (upRatio < 0.35)      return "rain";
+    if (upRatio < 0.55)      return "cloudy";
+    if (upRatio < 0.75)      return "partly";
+    return "sunny";
+  }
+
+  /* ══════════════════════════════════════════════
+     실시간 데이터 (네이버 증권 API + CORS 프록시)
+     ══════════════════════════════════════════════ */
+  const NAVER_INDEX  = "https://m.stock.naver.com/api/index/KOSPI/basic";
+  const NAVER_STOCKS = "https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page=1&pageSize=30";
+
+  // 앞에서부터 순서대로 시도한다. 공개 프록시는 간헐적으로 실패하므로 여러 개를 둔다.
+  const PROXIES = [
+    { make: u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
+      unwrap: t => JSON.parse(t) },
+    { make: u => "https://api.allorigins.win/get?url=" + encodeURIComponent(u),
+      unwrap: t => JSON.parse(JSON.parse(t).contents) },
+    { make: u => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u),
+      unwrap: t => JSON.parse(t) },
+    { make: u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
+      unwrap: t => JSON.parse(t) },
+  ];
+  let proxyIdx = 0;
+
+  async function fetchJson(url) {
+    for (let i = 0; i < PROXIES.length; i++) {
+      const idx = (proxyIdx + i) % PROXIES.length;
+      const p = PROXIES[idx];
+      try {
+        const res = await fetch(p.make(url), { signal: AbortSignal.timeout(12000) });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const json = p.unwrap(await res.text());
+        proxyIdx = idx; // 성공한 프록시를 다음에도 우선 사용
+        return json;
+      } catch (e) { /* 다음 프록시 시도 */ }
+    }
+    throw new Error("모든 프록시 실패");
+  }
+
+  const num = s => parseFloat(String(s).replace(/,/g, "")) || 0;
+
+  // 네이버 등락 코드: 1 상한, 2 상승, 3 보합, 4 하한, 5 하락
+  function dirOf(item) {
+    const code = item.compareToPreviousPrice && item.compareToPreviousPrice.code;
+    if (code === "1" || code === "2") return "up";
+    if (code === "4" || code === "5") return "down";
+    return "flat";
+  }
+
+  async function fetchLive() {
+    const [idx, top] = await Promise.all([
+      fetchJson(NAVER_INDEX),
+      fetchJson(NAVER_STOCKS),
+    ]);
+    return {
+      index: {
+        name: idx.stockName || "코스피",
+        value: num(idx.closePrice),
+        chgPct: num(idx.fluctuationsRatio) * (dirOf(idx) === "down" ? -1 : 1),
+        marketStatus: idx.marketStatus,           // "OPEN" | "CLOSE"
+        tradedAt: idx.localTradedAt,
+      },
+      stocks: (top.stocks || []).map(s => {
+        const dir = dirOf(s);
+        const ratio = Math.abs(num(s.fluctuationsRatio));
+        return {
+          name: s.stockName,
+          price: num(s.closePrice),
+          chgPct: dir === "down" ? -ratio : dir === "flat" ? 0 : ratio,
+          dir,
+        };
+      }),
+    };
+  }
+
+  /* ══════════════════════════════════════════════
+     시뮬레이션 데이터
+     ══════════════════════════════════════════════ */
+  const NAMES = [
+    "한빛전자", "청운반도체", "미래바이오", "동해화학", "세종금융",
+    "한강건설", "누리통신", "가온에너지", "별빛제약", "다온물산",
+    "새벽식품", "하늘항공", "푸른해운", "소망섬유", "빛나개발",
+    "온새미로", "두리기계", "참솔전지", "마루상사", "예솔소재",
+  ];
+  const simStocks = NAMES.map(name => ({
+    name,
+    base: Math.round((Math.random() * 190 + 10) * 1000) / 10,
+    chg: 0,
+  }));
+  const IDX_BASE = 2500;
+  const FLAT_BAND = 0.15; // 시뮬레이션에서 ±0.15% 이내는 보합
+
+  const SCENARIOS = {
+    sunny:  { bias:  2.2, spread: 2.0 },
+    cloudy: { bias:  0.0, spread: 0.7 },
+    storm:  { bias: -2.6, spread: 1.6 },
+    fear:   { bias: -6.5, spread: 3.5 },
+  };
+
+  let autoDrift = 0;
+
+  function gauss() {
+    return (Math.random() + Math.random() + Math.random()) / 3 * 2 - 1;
+  }
+
+  function simTick() {
+    let bias, spread;
+    if (mode === "auto") {
+      autoDrift += gauss() * 0.55;
+      autoDrift = Math.max(-4.5, Math.min(3.2, autoDrift));
+      bias = autoDrift;
+      spread = 1.4;
+    } else {
+      ({ bias, spread } = SCENARIOS[mode]);
+    }
+
+    for (const s of simStocks) {
+      const target = bias + gauss() * spread;
+      s.chg += (target - s.chg) * 0.45 + gauss() * 0.15;
+    }
+
+    let sum = 0;
+    for (const s of simStocks) sum += s.chg;
+    const idxChg = sum / simStocks.length;
+
+    render({
+      index: {
+        name: "가상 종합지수",
+        value: IDX_BASE * (1 + idxChg / 100),
+        chgPct: idxChg,
+      },
+      stocks: simStocks.map(s => ({
+        name: s.name,
+        price: s.base * (1 + s.chg / 100),
+        chgPct: s.chg,
+        dir: s.chg > FLAT_BAND ? "up" : s.chg < -FLAT_BAND ? "down" : "flat",
+      })),
+    });
+  }
+
+  /* ══════════════════════════════════════════════
+     렌더링
+     ══════════════════════════════════════════════ */
+  const $ = id => document.getElementById(id);
+  const fmt = (n, d = 2) => n.toLocaleString("ko-KR", { minimumFractionDigits: d, maximumFractionDigits: d });
+  let lastWeatherKey = null;
+
+  function setStatus(kind, text) {
+    const el = $("status");
+    el.className = "status" + (kind ? " " + kind : "");
+    $("statusText").textContent = text;
+  }
+
+  function render(data) {
+    const { index, stocks } = data;
+    let up = 0, down = 0, flat = 0;
+    for (const s of stocks) {
+      if (s.dir === "up") up++;
+      else if (s.dir === "down") down++;
+      else flat++;
+    }
+    const total = stocks.length || 1;
+    const upRatio = up / total;
+
+    // 날씨 카드
+    const key = classify(upRatio, index.chgPct);
+    const w = WEATHER[key];
+    $("wEmoji").textContent = w.emoji;
+    $("wName").textContent = w.name;
+    $("wDesc").textContent = w.desc;
+
+    if (key !== lastWeatherKey) {
+      document.body.className = w.cls;
+      buildSky(key);
+      const hero = $("hero");
+      hero.classList.remove("changed");
+      void hero.offsetWidth;
+      hero.classList.add("changed");
+      lastWeatherKey = key;
+    }
+
+    // 지수
+    $("idxName").textContent = index.name;
+    $("idxValue").textContent = fmt(index.value);
+    const chgEl = $("idxChg");
+    chgEl.textContent = (index.chgPct > 0 ? "▲ +" : index.chgPct < 0 ? "▼ " : "") + fmt(index.chgPct) + "%";
+    chgEl.className = "chg " + (index.chgPct > 0.05 ? "up" : index.chgPct < -0.05 ? "down" : "flat");
+
+    // 비율 바
+    const pct = n => Math.round(n / total * 100);
+    $("upPct").textContent = pct(up) + "%";
+    $("flatPct").textContent = pct(flat) + "%";
+    $("downPct").textContent = pct(down) + "%";
+    $("upCnt").textContent = up;
+    $("flatCnt").textContent = flat;
+    $("downCnt").textContent = down;
+    $("segUp").style.width = (up / total * 100) + "%";
+    $("segFlat").style.width = (flat / total * 100) + "%";
+    $("segDown").style.width = (down / total * 100) + "%";
+
+    // 종목 그리드
+    let html = "";
+    for (const s of stocks) {
+      const arrow = s.dir === "up" ? "▲" : s.dir === "down" ? "▼" : "—";
+      const sign = s.chgPct > 0 ? "+" : "";
+      const priceStr = s.price >= 1000
+        ? Math.round(s.price).toLocaleString("ko-KR")
+        : fmt(s.price);
+      html += `<div class="stock">
+        <div class="nm">${s.name}</div>
+        <div class="pc">${priceStr}</div>
+        <div class="ch ${s.dir}">${arrow} ${sign}${fmt(s.chgPct)}%</div>
+      </div>`;
+    }
+    $("stockGrid").innerHTML = html;
+  }
+
+  /* ── 하늘 장식 생성 ────────────────────────── */
+  function buildSky(key) {
+    const sky = $("sky");
+    sky.innerHTML = "";
+    const add = (cls, style) => {
+      const el = document.createElement("div");
+      el.className = cls;
+      Object.assign(el.style, style);
+      sky.appendChild(el);
+      return el;
+    };
+    const rnd = (a, b) => a + Math.random() * (b - a);
+
+    if (key === "sunny" || key === "partly") {
+      add("sun", {});
+    }
+    const cloudCount = { sunny: 2, partly: 4, cloudy: 7, rain: 7, storm: 8, fear: 6 }[key];
+    const cloudCls = key === "fear" ? "grim" : (key === "rain" || key === "storm") ? "dark" : "";
+    for (let i = 0; i < cloudCount; i++) {
+      add("cloud " + cloudCls, {
+        top: rnd(3, 40) + "%",
+        left: rnd(-10, 90) + "%",
+        width: rnd(90, 220) + "px",
+        height: rnd(28, 48) + "px",
+        opacity: rnd(0.5, 0.95),
+        animationDuration: rnd(50, 110) + "s",
+        animationDelay: -rnd(0, 60) + "s",
+      });
+    }
+    if (key === "rain" || key === "storm" || key === "fear") {
+      const drops = key === "rain" ? 55 : 110;
+      for (let i = 0; i < drops; i++) {
+        add("drop", {
+          left: rnd(0, 100) + "%",
+          animationDuration: rnd(0.45, 0.95) + "s",
+          animationDelay: -rnd(0, 1) + "s",
+          height: rnd(14, 24) + "px",
+        });
+      }
+    }
+    if (key === "fear") {
+      const junk = ["📉", "💸", "🧾", "📄", "🍂"];
+      for (let i = 0; i < 12; i++) {
+        add("debris", {
+          left: rnd(5, 90) + "%",
+          top: rnd(55, 95) + "%",
+          animationDuration: rnd(2.2, 4.2) + "s",
+          animationDelay: -rnd(0, 4) + "s",
+        }).textContent = junk[i % junk.length];
+      }
+    }
+  }
+
+  /* ══════════════════════════════════════════════
+     모드 관리
+     ══════════════════════════════════════════════ */
+  const LIVE_INTERVAL = 60000; // 실시간 모드 갱신 주기 (프록시 부담을 줄이기 위해 60초)
+  const SIM_INTERVAL = 2000;
+  let mode = "live";
+  let liveTimer = null;
+  let simTimer = null;
+  let retryTimer = null;
+  let liveBusy = false;
+
+  async function liveTick() {
+    if (liveBusy) return;
+    liveBusy = true;
+    try {
+      const data = await fetchLive();
+      if (mode !== "live") return; // 로딩 중 모드가 바뀐 경우
+      render(data);
+      const at = data.index.tradedAt ? new Date(data.index.tradedAt) : new Date();
+      const hhmm = String(at.getHours()).padStart(2, "0") + ":" + String(at.getMinutes()).padStart(2, "0");
+      const open = data.index.marketStatus === "OPEN";
+      setStatus("live", (open ? "장중" : "장마감") + " · 기준 " + hhmm + " · 네이버 증권");
+    } catch (e) {
+      if (mode !== "live") return;
+      setStatus("err", "시세를 불러오지 못했어요 — 잠시 후 자동 재시도");
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(liveTick, 8000); // 정기 주기보다 빠르게 재시도
+    } finally {
+      liveBusy = false;
+    }
+  }
+
+  function setMode(next) {
+    mode = next;
+    clearInterval(liveTimer);
+    clearInterval(simTimer);
+    clearTimeout(retryTimer);
+    liveTimer = simTimer = retryTimer = null;
+
+    if (mode === "live") {
+      setStatus("", "연결 중…");
+      liveTick();
+      liveTimer = setInterval(liveTick, LIVE_INTERVAL);
+    } else {
+      if (mode === "auto") autoDrift = 0;
+      setStatus("", "시뮬레이션 (가상 데이터)");
+      simTick();
+      simTimer = setInterval(simTick, SIM_INTERVAL);
+    }
+  }
+
+  $("controls").addEventListener("click", e => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    for (const b of $("controls").children) b.classList.toggle("active", b === btn);
+    setMode(btn.dataset.mode);
+  });
+
+  setMode("live");
+})();
+</script>
+</body>
+</html>
