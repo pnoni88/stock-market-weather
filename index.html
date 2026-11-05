@@ -137,6 +137,14 @@
   }
   .status.live .dot { background: #4ade80; animation: blink 1.6s ease-in-out infinite; }
   .status.err  .dot { background: #f87171; }
+  .status-detail {
+    margin: 8px auto 0;
+    max-width: 640px;
+    font-size: 0.75rem;
+    line-height: 1.55;
+    color: var(--text-dim);
+    word-break: keep-all;
+  }
   @keyframes blink {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.35; }
@@ -277,6 +285,7 @@
       <h1>📈 시장 날씨</h1>
       <p>오늘의 주식 시장 분위기를 날씨로 알려드립니다</p>
       <span class="status" id="status"><span class="dot"></span><span id="statusText">연결 중…</span></span>
+      <p class="status-detail" id="statusDetail" hidden></p>
     </header>
 
     <section class="hero" id="hero">
@@ -316,6 +325,7 @@
 
     <footer>
       실시간 모드: 네이버 증권 시세 기반 (코스피 시가총액 상위 30개 종목 · 지연/종가 시세일 수 있음)<br>
+      시세는 자체 서버(api/market)를 거쳐 받아오며, 그 서버가 없으면 공개 프록시를 시도합니다.<br>
       시뮬레이션 모드는 가상 데이터입니다. 투자 판단의 근거로 사용하지 마세요.
     </footer>
   </main>
@@ -351,37 +361,55 @@
   }
 
   /* ══════════════════════════════════════════════
-     실시간 데이터 (네이버 증권 API + CORS 프록시)
+     실시간 데이터 (네이버 증권)
+     브라우저는 네이버 API를 직접 부를 수 없다(CORS). 그래서 중계가 필요하다.
+       1순위: 같은 출처의 api/market — Vercel 함수가 서버에서 네이버를 대신 조회
+       2순위: 공개 CORS 프록시 — 무료 서비스라 막히거나 느릴 수 있는 비상용
      ══════════════════════════════════════════════ */
   const NAVER_INDEX  = "https://m.stock.naver.com/api/index/KOSPI/basic";
   const NAVER_STOCKS = "https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page=1&pageSize=30";
+  const OWN_API = "api/market";
+  // file:// 로 열었을 때는 같은 출처 서버가 없으므로 자체 API를 건너뛴다
+  const CAN_USE_OWN_API = location.protocol === "http:" || location.protocol === "https:";
+  const REQUEST_TIMEOUT = 10000;
 
-  // 앞에서부터 순서대로 시도한다. 공개 프록시는 간헐적으로 실패하므로 여러 개를 둔다.
   const PROXIES = [
-    { make: u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
-      unwrap: t => JSON.parse(t) },
-    { make: u => "https://api.allorigins.win/get?url=" + encodeURIComponent(u),
-      unwrap: t => JSON.parse(JSON.parse(t).contents) },
-    { make: u => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u),
-      unwrap: t => JSON.parse(t) },
-    { make: u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
-      unwrap: t => JSON.parse(t) },
+    { name: "allorigins",   make: u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u) },
+    { name: "codetabs",     make: u => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u) },
+    { name: "corsproxy.io", make: u => "https://corsproxy.io/?url=" + encodeURIComponent(u) },
   ];
-  let proxyIdx = 0;
+  let proxyIdx = 0; // 마지막으로 성공한 프록시를 다음에도 먼저 시도
 
-  async function fetchJson(url) {
-    for (let i = 0; i < PROXIES.length; i++) {
-      const idx = (proxyIdx + i) % PROXIES.length;
-      const p = PROXIES[idx];
-      try {
-        const res = await fetch(p.make(url), { signal: AbortSignal.timeout(12000) });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const json = p.unwrap(await res.text());
-        proxyIdx = idx; // 성공한 프록시를 다음에도 우선 사용
-        return json;
-      } catch (e) { /* 다음 프록시 시도 */ }
+  // AbortSignal.timeout이 없는 브라우저(Safari 15 이하 등)에서도 동작하도록
+  function timeoutSignal(ms) {
+    if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+    const c = new AbortController();
+    setTimeout(() => c.abort(), ms);
+    return c.signal;
+  }
+
+  // 실패 시 원인을 사람이 읽을 수 있는 문장으로 담아 던진다 (kind로 종류 구분)
+  function fail(kind, message, status) {
+    return Object.assign(new Error(message), { kind, status });
+  }
+
+  async function getJson(url) {
+    let res, text;
+    try {
+      res = await fetch(url, { signal: timeoutSignal(REQUEST_TIMEOUT), cache: "no-store" });
+      text = await res.text();
+    } catch (e) {
+      throw e.name === "TimeoutError" || e.name === "AbortError"
+        ? fail("timeout", "시간 초과")
+        : fail("network", "연결 실패(차단 또는 CORS)");
     }
-    throw new Error("모든 프록시 실패");
+    let json = null;
+    try { json = JSON.parse(text); } catch (_) { /* 아래에서 처리 */ }
+    if (!res.ok) {
+      throw fail("http", "HTTP " + res.status + (json && json.error ? " · " + json.error : ""), res.status);
+    }
+    if (json === null || typeof json !== "object") throw fail("notjson", "JSON이 아닌 응답");
+    return json;
   }
 
   const num = s => parseFloat(String(s).replace(/,/g, "")) || 0;
@@ -394,30 +422,63 @@
     return "flat";
   }
 
-  async function fetchLive() {
-    const [idx, top] = await Promise.all([
-      fetchJson(NAVER_INDEX),
-      fetchJson(NAVER_STOCKS),
-    ]);
+  // 등락률 숫자에 부호가 붙어 오든 아니든, 부호는 등락 코드로만 정한다
+  function signedRatio(item) {
+    const r = Math.abs(num(item.fluctuationsRatio));
+    const d = dirOf(item);
+    return d === "down" ? -r : d === "flat" ? 0 : r;
+  }
+
+  function normalize(idx, top) {
+    if (!idx || idx.closePrice == null || !top || !Array.isArray(top.stocks) || top.stocks.length === 0) {
+      throw fail("shape", "예상과 다른 응답 형식");
+    }
     return {
       index: {
         name: idx.stockName || "코스피",
         value: num(idx.closePrice),
-        chgPct: num(idx.fluctuationsRatio) * (dirOf(idx) === "down" ? -1 : 1),
+        chgPct: signedRatio(idx),
         marketStatus: idx.marketStatus,           // "OPEN" | "CLOSE"
         tradedAt: idx.localTradedAt,
       },
-      stocks: (top.stocks || []).map(s => {
-        const dir = dirOf(s);
-        const ratio = Math.abs(num(s.fluctuationsRatio));
-        return {
-          name: s.stockName,
-          price: num(s.closePrice),
-          chgPct: dir === "down" ? -ratio : dir === "flat" ? 0 : ratio,
-          dir,
-        };
-      }),
+      stocks: top.stocks.map(s => ({
+        name: String(s.stockName || ""),
+        price: num(s.closePrice),
+        chgPct: signedRatio(s),
+        dir: dirOf(s),
+      })),
     };
+  }
+
+  async function fetchLive() {
+    const reasons = [];
+    let ownApiMissing = !CAN_USE_OWN_API;
+
+    if (CAN_USE_OWN_API) {
+      try {
+        const j = await getJson(OWN_API);
+        return { ...normalize(j.index, j.marketValue), via: "자체 서버", own: true };
+      } catch (e) {
+        reasons.push("자체 서버(api/market): " + e.message);
+        // 404이거나 JSON 대신 HTML이 오면 이 호스팅에는 함수가 배포되지 않은 것
+        ownApiMissing = (e.kind === "http" && e.status === 404) || e.kind === "notjson";
+      }
+    }
+
+    for (let i = 0; i < PROXIES.length; i++) {
+      const k = (proxyIdx + i) % PROXIES.length;
+      const p = PROXIES[k];
+      try {
+        const [idx, top] = await Promise.all([getJson(p.make(NAVER_INDEX)), getJson(p.make(NAVER_STOCKS))]);
+        const data = normalize(idx, top);
+        proxyIdx = k;
+        return { ...data, via: "공개 프록시 " + p.name, own: false };
+      } catch (e) {
+        reasons.push(p.name + ": " + e.message);
+      }
+    }
+
+    throw Object.assign(new Error("모든 경로 실패"), { reasons, ownApiMissing });
   }
 
   /* ══════════════════════════════════════════════
@@ -492,10 +553,31 @@
   const fmt = (n, d = 2) => n.toLocaleString("ko-KR", { minimumFractionDigits: d, maximumFractionDigits: d });
   let lastWeatherKey = null;
 
-  function setStatus(kind, text) {
+  function setStatus(kind, text, detail) {
     const el = $("status");
     el.className = "status" + (kind ? " " + kind : "");
     $("statusText").textContent = text;
+    const d = $("statusDetail");
+    d.textContent = detail || "";
+    d.hidden = !detail;
+  }
+
+  // 실시간 모드로 들어올 때 시뮬레이션 화면이 실시간처럼 남아 있지 않도록 비운다
+  function resetDisplay() {
+    lastWeatherKey = null;
+    $("wEmoji").textContent = "⛅";
+    $("wName").textContent = "불러오는 중";
+    $("wDesc").textContent = "시장 데이터를 가져오고 있어요…";
+    $("idxName").textContent = "코스피";
+    $("idxValue").textContent = "—";
+    $("idxChg").textContent = "—";
+    $("idxChg").className = "chg flat";
+    for (const k of ["up", "flat", "down"]) {
+      $(k + "Pct").textContent = "0%";
+      $(k + "Cnt").textContent = "0";
+    }
+    for (const k of ["segUp", "segFlat", "segDown"]) $(k).style.width = "0";
+    $("stockGrid").innerHTML = "";
   }
 
   function render(data) {
@@ -618,46 +700,69 @@
   /* ══════════════════════════════════════════════
      모드 관리
      ══════════════════════════════════════════════ */
-  const LIVE_INTERVAL = 60000; // 실시간 모드 갱신 주기 (프록시 부담을 줄이기 위해 60초)
+  // 갱신 주기: 자체 서버는 CDN 캐시(20초)가 있어 30초, 공개 프록시는 부담을 줄이려 60초
+  const LIVE_INTERVAL_OWN = 30000;
+  const LIVE_INTERVAL_PROXY = 60000;
+  const RETRY_BASE = 8000;   // 실패 시 8 → 16 → 32 → 60초 간격으로 재시도
+  const RETRY_MAX = 60000;
   const SIM_INTERVAL = 2000;
   let mode = "live";
   let liveTimer = null;
   let simTimer = null;
-  let retryTimer = null;
-  let liveBusy = false;
+  let liveGen = 0;      // 모드가 바뀔 때마다 증가 → 그 전에 시작된 요청의 결과는 버린다
+  let liveFails = 0;
+  let lastLiveAt = null; // 마지막으로 실시간 데이터를 받은 시각 (표시용)
+
+  // 브라우저가 어느 나라 시간대이든 한국 시각으로 표시
+  const kstHHMM = d => d.toLocaleTimeString("ko-KR", {
+    timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
 
   async function liveTick() {
-    if (liveBusy) return;
-    liveBusy = true;
+    const gen = liveGen;
+    let next;
     try {
       const data = await fetchLive();
-      if (mode !== "live") return; // 로딩 중 모드가 바뀐 경우
+      if (gen !== liveGen) return; // 로딩 중 모드가 바뀐 경우
+      liveFails = 0;
       render(data);
-      const at = data.index.tradedAt ? new Date(data.index.tradedAt) : new Date();
-      const hhmm = String(at.getHours()).padStart(2, "0") + ":" + String(at.getMinutes()).padStart(2, "0");
+      let at = new Date(data.index.tradedAt);
+      if (isNaN(at)) at = new Date();
+      lastLiveAt = kstHHMM(at);
       const open = data.index.marketStatus === "OPEN";
-      setStatus("live", (open ? "장중" : "장마감") + " · 기준 " + hhmm + " · 네이버 증권");
+      setStatus("live", (open ? "장중" : "장마감") + " · 기준 " + lastLiveAt + " · 네이버 증권 (" + data.via + ")");
+      next = data.own ? LIVE_INTERVAL_OWN : LIVE_INTERVAL_PROXY;
     } catch (e) {
-      if (mode !== "live") return;
-      setStatus("err", "시세를 불러오지 못했어요 — 잠시 후 자동 재시도");
-      clearTimeout(retryTimer);
-      retryTimer = setTimeout(liveTick, 8000); // 정기 주기보다 빠르게 재시도
-    } finally {
-      liveBusy = false;
+      if (gen !== liveGen) return;
+      liveFails++;
+      next = Math.min(RETRY_MAX, RETRY_BASE * 2 ** (liveFails - 1));
+      const reasons = e.reasons || [e.message];
+      console.warn("[시장 날씨] 시세 조회 실패:\n- " + reasons.join("\n- "));
+      let detail = "원인: " + reasons.join(" · ");
+      if (e.ownApiMissing) {
+        detail += CAN_USE_OWN_API
+          ? " — 이 호스팅에는 api/market 함수가 없어요. Vercel에 배포하면 안정적으로 동작합니다 (README 참고)."
+          : " — 파일로 직접 열면 자체 서버를 쓸 수 없어요. Vercel에 배포하면 안정적으로 동작합니다 (README 참고).";
+      }
+      if (lastLiveAt) detail = "화면은 " + lastLiveAt + " 기준 마지막 데이터입니다. " + detail;
+      setStatus("err", "시세를 불러오지 못했어요 — " + Math.round(next / 1000) + "초 후 재시도", detail);
     }
+    liveTimer = setTimeout(liveTick, next);
   }
 
   function setMode(next) {
     mode = next;
-    clearInterval(liveTimer);
+    liveGen++;
+    clearTimeout(liveTimer);
     clearInterval(simTimer);
-    clearTimeout(retryTimer);
-    liveTimer = simTimer = retryTimer = null;
+    liveTimer = simTimer = null;
 
     if (mode === "live") {
+      liveFails = 0;
+      lastLiveAt = null;
+      resetDisplay();
       setStatus("", "연결 중…");
       liveTick();
-      liveTimer = setInterval(liveTick, LIVE_INTERVAL);
     } else {
       if (mode === "auto") autoDrift = 0;
       setStatus("", "시뮬레이션 (가상 데이터)");
