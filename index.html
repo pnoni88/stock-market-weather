@@ -738,12 +738,14 @@
       next = Math.min(RETRY_MAX, RETRY_BASE * 2 ** (liveFails - 1));
       const reasons = e.reasons || [e.message];
       console.warn("[시장 날씨] 시세 조회 실패:\n- " + reasons.join("\n- "));
-      let detail = "원인: " + reasons.join(" · ");
+      // 자체 서버가 없으면 남은 길은 무료 공개 프록시뿐이라 자주 실패한다 → 해결 방법을 먼저 보여준다
+      let detail = "";
       if (e.ownApiMissing) {
-        detail += CAN_USE_OWN_API
-          ? " — 이 호스팅에는 api/market 함수가 없어요. Vercel에 배포하면 안정적으로 동작합니다 (README 참고)."
-          : " — 파일로 직접 열면 자체 서버를 쓸 수 없어요. Vercel에 배포하면 안정적으로 동작합니다 (README 참고).";
+        detail = CAN_USE_OWN_API
+          ? "해결: 이 주소에는 시세 중계 서버(api/market)가 없어요. 이 폴더에서 터미널로 npm start 를 실행해 그 주소로 열거나, Vercel에 배포하세요 (README 참고). "
+          : "해결: HTML 파일을 직접 열면 시세 중계 서버(api/market)를 쓸 수 없어 무료 공개 프록시에만 기대게 됩니다. 이 폴더에서 터미널로 npm start 를 실행한 뒤 http://127.0.0.1:3000 을 여세요 (README 참고). ";
       }
+      detail += "원인: " + reasons.join(" · ");
       if (lastLiveAt) detail = "화면은 " + lastLiveAt + " 기준 마지막 데이터입니다. " + detail;
       setStatus("err", "시세를 불러오지 못했어요 — " + Math.round(next / 1000) + "초 후 재시도", detail);
     }
